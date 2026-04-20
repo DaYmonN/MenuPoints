@@ -443,8 +443,6 @@ class MainActivity : AppCompatActivity() {
     private fun parseExcelAndSave(uri: Uri) {
         try {
             val inputStream: InputStream = contentResolver.openInputStream(uri) ?: return
-
-            // Используем XSSFWorkbook с меньшим потреблением памяти
             val workbook = WorkbookFactory.create(inputStream)
             val sheet = workbook.getSheetAt(0)
 
@@ -452,12 +450,10 @@ class MainActivity : AppCompatActivity() {
             var currentCategory = ""
             val items = mutableListOf<MenuItem>()
 
-            // Ограничиваем количество строк (максимум 500)
             val lastRowNum = minOf(sheet.lastRowNum, 500)
 
             for (rowIndex in 0..lastRowNum) {
                 val row = sheet.getRow(rowIndex) ?: continue
-
                 val firstCell = try { row.getCell(0)?.toString()?.trim() ?: "" } catch(_: Exception) { "" }
                 val secondCell = try { row.getCell(1)?.toString()?.trim() ?: "" } catch(_: Exception) { "" }
 
@@ -477,29 +473,66 @@ class MainActivity : AppCompatActivity() {
                         .lowercase()
                     items.add(MenuItem(itemId, currentCategory, firstCell, defaultValue))
                 }
-
-                // Очищаем список каждые 100 строк, чтобы не накапливать
-                if (items.size > 200) {
-                    flushItemsToFirebase(items, currentPointId!!)
-                    items.clear()
-                }
             }
 
-            // Сохраняем оставшиеся
-            if (items.isNotEmpty() && currentPointId != null) {
-                flushItemsToFirebase(items, currentPointId!!)
+            if (items.isNotEmpty()) {
+                applyMenuToAllPointsFromExcel(items)
+                Toast.makeText(this, "Загружено ${items.size} блюд для всех точек", Toast.LENGTH_LONG).show()
+            } else {
+                Toast.makeText(this, "Не найдено блюд", Toast.LENGTH_SHORT).show()
             }
 
             workbook.close()
             inputStream.close()
-
-            Toast.makeText(this, "Загрузка завершена", Toast.LENGTH_LONG).show()
 
         } catch (e: OutOfMemoryError) {
             Toast.makeText(this, "Файл слишком большой. Разбейте Excel на части", Toast.LENGTH_LONG).show()
             e.printStackTrace()
         } catch (e: Exception) {
             Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun applyMenuToAllPointsFromExcel(items: List<MenuItem>) {
+        val progressDialog = AlertDialog.Builder(this)
+            .setTitle("Обновление")
+            .setMessage("Загружаем меню для всех точек...")
+            .setCancelable(false)
+            .create()
+        progressDialog.show()
+
+        pointsRef.get().addOnSuccessListener { pointsSnapshot ->
+            val updates = mutableMapOf<String, Any>()
+            val pointsList = pointsSnapshot.children.toList()
+
+            for (point in pointsList) {
+                val pointId = point.key ?: continue
+                val menuMap = mutableMapOf<String, Any>()
+                items.forEach { item ->
+                    menuMap[item.id] = mapOf(
+                        "id" to item.id,
+                        "category" to item.category,
+                        "name" to item.name,
+                        "defaultValue" to item.defaultValue
+                    )
+                }
+                updates["menus/$pointId"] = menuMap
+            }
+
+            database.reference.updateChildren(updates).addOnSuccessListener {
+                progressDialog.dismiss()
+                Toast.makeText(this, "Меню обновлено для ${pointsList.size} точек", Toast.LENGTH_LONG).show()
+                currentPointId?.let {
+                    loadMenuForPoint(it)
+                    loadMarksForPoint(it)
+                }
+            }.addOnFailureListener { e ->
+                progressDialog.dismiss()
+                Toast.makeText(this, "Ошибка: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }.addOnFailureListener { e ->
+            progressDialog.dismiss()
+            Toast.makeText(this, "Не удалось загрузить список точек: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
 
