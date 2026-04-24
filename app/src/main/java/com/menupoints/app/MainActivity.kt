@@ -144,15 +144,36 @@ class MainActivity : AppCompatActivity() {
         if (currentPointId == null || menuAdapter == null) return
 
         val newMarks = menuAdapter!!.getAllMarks()
+        val oldMarks = currentMarks.toMutableMap()
+
+        // Находим изменения
+        val changes = mutableListOf<String>()
+        val allKeys = newMarks.keys + oldMarks.keys
+        allKeys.forEach { key ->
+            val oldValue = oldMarks[key] ?: 0
+            val newValue = newMarks[key] ?: 0
+            if (oldValue != newValue) {
+                changes.add("$key: $oldValue→$newValue")
+            }
+        }
+
+        if (changes.isNotEmpty()) {
+            val logRef = database.getReference("adminLogs").push()
+            logRef.setValue(mapOf(
+                "timestamp" to System.currentTimeMillis(),
+                "date" to java.text.SimpleDateFormat("dd.MM.yyyy, HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date()),
+                "action" to "marks_changed",
+                "details" to "Точка: ${pointTitle.text}, ${changes.joinToString(", ")}",
+                "userId" to "android"
+            ))
+        }
+
+        // ... существующий код сохранения
         val updates = mutableMapOf<String, Any>()
         for ((key, value) in newMarks) {
             updates[key] = value
         }
-        marksRef.child(currentPointId!!).setValue(updates).addOnSuccessListener {
-            Toast.makeText(this, "Сохранено!", Toast.LENGTH_SHORT).show()
-        }.addOnFailureListener {
-            Toast.makeText(this, "Ошибка сохранения", Toast.LENGTH_SHORT).show()
-        }
+        marksRef.child(currentPointId!!).setValue(updates)
     }
 
     private fun listenForPendingMenu() {
